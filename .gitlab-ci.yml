@@ -1,0 +1,78 @@
+stages:
+  - Tests
+  - Provisioning
+  - Deploy
+
+.Unit Tests:
+  stage: Tests
+  image: composer:latest
+  script:
+    - cd laravel-app
+    - cp .env.example .env
+    - composer install
+    - php artisan key:generate
+    - vendor/bin/phpunit
+  only:
+    - branches
+    - merge_requests
+  # allow_failure: true
+
+Provisioning:
+  stage: Provisioning
+  image: zenika/terraform-aws-cli
+  environment:
+    name: Dev
+    on_stop: Destroy Dev
+  script:
+    - cd ./devops/terraform/
+    - terraform init
+    - terraform validate
+    - terraform plan
+    - terraform apply -auto-approve
+    - echo "[web]" > $CI_PROJECT_DIR/hosts.ini
+    - terraform output --raw ec2_complete_public_ip >> $CI_PROJECT_DIR/hosts.ini
+  artifacts:
+    expire_in: 24 hour
+    when: always
+    paths:
+      - $CI_PROJECT_DIR/hosts.ini
+  only:
+    - branches
+   #when: manual
+
+Ansible Deploy:
+  stage: Deploy
+  image: ligadigital/ansible:1
+  before_script:
+    - mkdir -p /root/.ssh
+    - chmod 700 /root/.ssh
+    - touch /root/.ssh/known_hosts
+    - chmod 600 /root/.ssh/known_hosts
+    - ssh-keygen -R `cat hosts.ini |sed -n 2p`
+    - ssh-keyscan -H `cat hosts.ini |sed -n 2p` >> ~/.ssh/known_hosts
+    - cp ${ssh_key} ~/.ssh/id_rsa
+    - chmod 600 ~/.ssh/id_rsa
+  script:
+#    - cp $ansible_vars vars.yml
+    - ansible-galaxy install -r devops/requirements.yml
+    - ansible-playbook devops/playbook.yml --inventory ./hosts.ini #--extra-vars "@vars.yml"
+  only:
+    - branches
+ 
+Destroy Dev:
+  stage: Provisioning
+  image: zenika/terraform-aws-cli
+  variables:
+    GIT_STRATEGY: none
+  script:
+    - cd ./devops/terraform/
+    - terraform destroy -auto-approve
+  environment:
+    name: Dev
+    action: stop
+  needs:
+    - Provisioning
+  dependencies: []
+  only:
+    - branches
+  when: manual

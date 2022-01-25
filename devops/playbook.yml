@@ -1,0 +1,86 @@
+---
+# ansible-playbook playbook.yml -i hosts.ini -vv -K
+- hosts: web
+  become: true
+  remote_user: ubuntu
+  vars:
+    php_enable_php_fpm: true
+    apache_vhosts:
+      - servername: "laravel.local"
+        documentroot: "/var/www/laravel/public"
+        extra_parameters: |
+          ProxyPassMatch ^/(.*\.php(/.*)?)$ "fcgi://127.0.0.1:9000/var/www/laravel/public"
+    APP_NAME: Laravel
+    APP_URL: laravel.local
+    DB_HOST: 127.0.0.1
+    DB_DATABASE: laravel_db
+    DB_USERNAME: laravel_user
+    DB_PASSWORD: laravel_pass
+
+  collections:
+    - community.mysql
+
+  roles:
+    - geerlingguy.mysql
+    - geerlingguy.apache-php-fpm
+    - geerlingguy.php-mysql
+    - geerlingguy.composer
+
+  tasks:
+    - name: Remove apache default conf
+      ansible.builtin.file:
+        path: /etc/apache2/sites-enabled/000-default.conf
+        state: absent
+
+    - name: Remove apache default conf
+      ansible.builtin.file:
+        path: /etc/apache2/sites-enabled/000-default.conf
+        state: absent
+
+    - name: Copy directory
+      ansible.builtin.copy:
+        src: ../laravel-app/
+        dest: /var/www/laravel
+
+    - name: Change file ownership, group and permissions
+      ansible.builtin.file:
+        path: /var/www/laravel
+        owner: www-data
+        group: www-data
+        recurse: yes
+
+    - name: Create config file
+      ansible.builtin.template:
+        src: env.j2
+        dest: /var/www/laravel/.env
+
+    - name: Download and installs all libs and dependencies outlined in the /var/www/laravel/composer.lock
+      community.general.composer:
+        command: update
+        arguments: --quiet
+        working_dir: /var/www/laravel
+
+    - name: Create a new database with name {{ DB_DATABASE }}
+      community.mysql.mysql_db:
+        name: "{{ DB_DATABASE }}"
+        state: present
+
+    - name: Create user with password, all database privileges and 'WITH GRANT OPTION' in db1 and db2
+      community.mysql.mysql_user:
+        state: present
+        name: "{{ DB_USERNAME }}"
+        password: "{{ DB_PASSWORD }}"
+        priv:
+          "{{ DB_DATABASE }}.*:ALL,GRANT"
+
+    - name:  Run Artisan command
+      ansible.builtin.command: "{{ item }}"
+      with_items:
+        - "php /var/www/laravel/artisan key:generate"
+        - "php /var/www/laravel/artisan storage:link"
+        - "php /var/www/laravel/artisan migrate:refresh --seed"
+
+    - name: Restart apache
+      ansible.builtin.service:
+        name: apache2
+        state: restarted
