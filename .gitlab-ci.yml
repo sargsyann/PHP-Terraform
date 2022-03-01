@@ -76,3 +76,4 @@ Destroy Dev:
   only:
     - branches
   when: manual
+  
